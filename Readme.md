@@ -1,6 +1,6 @@
 # collaborative-zksnarks
 
-This is a repo forked from [alex-ozdemir/collaborative-zksnark](https://github.com/alex-ozdemir/collaborative-zksnark) but a second demo computation(fibonacci) is added in the [collaborative-zksnark/mpc-snarks/src/proofs.rs](https://github.com/brndv/collaborative-zksnark/blob/main/mpc-snarks/src/proof.rs). And the script [collaborative-zksnark/blob/main/mpc-snarks/scripts/print.zsh](https://github.com/brndv/collaborative-zksnark/blob/main/mpc-snarks/scripts/print.zsh) is adapted to run the demo and print some details of the king node in the mpc-snarks process.
+This is a repo forked from [alex-ozdemir/collaborative-zksnark](https://github.com/alex-ozdemir/collaborative-zksnark) but a second demo computation(fibonacci) is added in the [collaborative-zksnark/mpc-snarks/src/proofs.rs](https://github.com/brndv/collaborative-zksnark/blob/main/mpc-snarks/src/proof.rs). And the script [collaborative-zksnark/blob/main/mpc-snarks/scripts/print.zsh](https://github.com/brndv/collaborative-zksnark/blob/main/mpc-snarks/scripts/print.zsh) is adapted to run the demo and print some details of the mpc-snarks process.
 
 ### Run The Demo
 
@@ -8,7 +8,7 @@ This is a repo forked from [alex-ozdemir/collaborative-zksnark](https://github.c
 git clone https://github.com/brndv/collaborative-zksnark.git
 cd collaborative-zksnark/mpc-snarks
 cargo build --release --bin proof
-./script/print.zsh fibonacci plonk spdz 10 3
+./scripts/print.zsh fibonacci plonk spdz 10 3
 ```
 
 about the ./script/print.zsh
@@ -47,6 +47,6 @@ The collaborative-snarks used here involves:
 
 1. Proving and Verifying parameters is set up of corresponding compuation circuit in the king node and publicized in the mpc net 
 2. Circuit data (witness) are produced in the king node and the witness vectors are broken into a set of vectors (with the same number of elments as in the witness vectors) as in corresponding MPC scheme. Every node in the mpc net holds its unique(with high probability) share(vector) of the witness. Each of the nodes computes its commitments based on the publicized proving parameters with its share and broadcasts the result in the net.
-3.  Every node in the MPC net can recover the final proof of the circuit data(witness) in step 2 produced in the king node according to the MPC scheme (SPDZ, GSZ, or HBC). And still the complete circuit data(witness) is only known by the king node after the MPC.
+3.  Every node in the MPC net can recover the final proof of the circuit data(witness) produced in the king node in step 2 according to the MPC scheme (SPDZ, GSZ, or HBC). And still the complete circuit data(witness) is only known by the king node after the MPC.
 
 This approach can be well exploited to alleviate the computation burden in the king node(client) and still protect the privacy of the client data.

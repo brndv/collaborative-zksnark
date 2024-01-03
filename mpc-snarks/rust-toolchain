@@ -1,0 +1,15 @@
+[channel]
+nightly = "2023-12-22"
+
+[target.'cfg(any(wasm32-unknown-unknown))']
+rustc = "nightly-2023-12-22"
+
+[components]
+rustfmt = { version = "nightly-2023-12-22", features = [] }
+
+[toolchain]
+channel = "nightly-2023-12-22"
+profile = "minimal"
+
+[tool.rustup]
+version = "1.26.0"
