@@ -38,7 +38,7 @@ $computation options : {squaring, fibonacci}
 
 $proof options : {groth16, marlin, plonk}
 
-$infra options:  {hbc, spdz, gsz, local, ark-local}
+$infra options:  {hbc, spdz, gsz, local, ark-local} (but no ark-local when applying marlin in $proof)
 
 ### About the collaborative-snarks used in this demo
 
