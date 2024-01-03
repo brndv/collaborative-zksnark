@@ -6,7 +6,7 @@ This is a repo forked from [alex-ozdemir/collaborative-zksnark](https://github.c
 
 ```bash
 git clone https://github.com/brndv/collaborative-zksnark.git
-cd collaborative-zksnark
+cd collaborative-zksnark/mpc-snarks
 cargo build --release --bin proof
 ./script/print.zsh fibonacci plonk spdz 10 3
 ```
@@ -38,7 +38,9 @@ $computation options : {squaring, fibonacci}
 
 $proof options : {groth16, marlin, plonk}
 
-$infra options:  {hbc, spdz, gsz, local, ark-local}
+$infra options:  {hbc, spdz, gsz, local, ark-local} (but ark-local not available when applying marlin in $proof)
+
+
 
 ### About the collaborative-snarks used in this demo
 
