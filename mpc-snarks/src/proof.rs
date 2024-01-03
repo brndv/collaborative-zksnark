@@ -31,7 +31,329 @@ trait SnarkBench {
     }
     fn mpc<E: PairingEngine, S: PairingShare<E>>(n: usize, timer_label: &str);
 }
+mod fibonacci {
+    use super::*;
+    #[derive(Clone)]
+    struct FibonacciCircuit<F: Field> {
+        chain: Vec<Option<F>>,
+    }
 
+    impl<F: Field> FibonacciCircuit<F> {
+        fn without_data(fiblen: usize) -> Self {
+            Self{
+                chain: vec![None; fiblen+2],
+            }
+        }
+        fn from_start(f0: F, f1: F, fiblen: usize) -> Self {
+            let mut chain = vec![Some(f0), Some(f1)];
+            for _ in 0..fiblen {
+                let mut rev = chain.iter().rev();
+                let (last, second_last) = (rev.next(), rev.next());
+                chain.push(Some( second_last.unwrap().unwrap() + last.unwrap().unwrap() ));
+            }
+            Self { chain }
+        }
+        fn from_chain(f: Vec<F>) -> Self {
+            Self {
+                chain: f.into_iter().map(Some).collect(),
+            }
+        }
+        fn fiblen(&self) -> usize {
+            self.chain.len() - 2
+        }
+    }
+    pub mod groth {
+        use super::*;
+        use crate::ark_groth16::{generate_random_parameters, prepare_verifying_key, verify_proof};
+        use crate::groth::prover::create_random_proof;
+
+        pub struct Groth16Bench;
+
+        impl SnarkBench for Groth16Bench {
+            fn local<E: PairingEngine>(n: usize, timer_label: &str) {
+                let rng = &mut test_rng();
+                let circ_no_data = FibonacciCircuit::without_data(n);
+
+                let params = generate_random_parameters::<E, _, _>(circ_no_data, rng).unwrap();
+
+                let pvk = prepare_verifying_key::<E>(&params.vk);
+
+                let a = E::Fr::rand(rng);
+                let b = E::Fr::rand(rng);
+                let circ_data = FibonacciCircuit::from_start(a, b, n);
+                let public_inputs = vec![circ_data.chain.last().unwrap().unwrap()];
+                let timer = start_timer!(|| timer_label);
+                let proof = create_random_proof::<E, _, _>(circ_data, &params, rng).unwrap();
+                end_timer!(timer);
+
+                assert!(verify_proof(&pvk, &proof, &public_inputs).unwrap());
+            }
+
+            fn ark_local<E: PairingEngine>(n: usize, timer_label: &str) {
+                let rng = &mut test_rng();
+                let circ_no_data = FibonacciCircuit::without_data(n);
+
+                let params = generate_random_parameters::<E, _, _>(circ_no_data, rng).unwrap();
+
+                let pvk = prepare_verifying_key::<E>(&params.vk);
+
+                let a = E::Fr::rand(rng);
+                let b = E::Fr::rand(rng);
+                let circ_data = FibonacciCircuit::from_start(a, b, n);
+                let public_inputs = vec![circ_data.chain.last().unwrap().unwrap()];
+                let timer = start_timer!(|| timer_label);
+                let proof =
+                    ark_groth16::create_random_proof::<E, _, _>(circ_data, &params, rng).unwrap();
+                end_timer!(timer);
+
+                assert!(verify_proof(&pvk, &proof, &public_inputs).unwrap());
+            }
+
+            fn mpc<E: PairingEngine, S: PairingShare<E>>(n: usize, timer_label: &str) {
+                let rng = &mut test_rng();
+                let circ_no_data = FibonacciCircuit::without_data(n);
+
+                let params = generate_random_parameters::<E, _, _>(circ_no_data, rng).unwrap();
+
+                let pvk = prepare_verifying_key::<E>(&params.vk);
+                let mpc_params = Reveal::from_public(params);
+
+                let a = E::Fr::rand(rng);
+                let b = E::Fr::rand(rng);
+                let computation_timer = start_timer!(|| "do the mpc (cheat)");
+                let circ_data = mpc_fibonacci_circuit::<
+                    E::Fr,
+                    <MpcPairingEngine<E, S> as PairingEngine>::Fr,
+                >(a, b, n);
+                let public_inputs = vec![circ_data.chain.last().unwrap().unwrap().reveal()];
+                end_timer!(computation_timer);
+                MpcMultiNet::reset_stats();
+                let timer = start_timer!(|| timer_label);
+                let proof = channel::without_cheating(|| {
+                    let pf = create_random_proof::<MpcPairingEngine<E, S>, _, _>(circ_data, &mpc_params, rng)
+                        .unwrap();
+                    let reveal_timer = start_timer!(|| "reveal");
+                    let pf = pf.reveal();
+                    end_timer!(reveal_timer);
+                    pf
+                });
+                end_timer!(timer);
+
+                assert!(verify_proof(&pvk, &proof, &public_inputs).unwrap());
+            }
+        }
+    }
+    
+    pub mod marlin {
+        use super::*;
+        use ark_marlin::Marlin;
+        use ark_marlin::*;
+        use ark_poly::univariate::DensePolynomial;
+        use ark_poly_commit::marlin::marlin_pc::MarlinKZG10;
+
+        type KzgMarlin<Fr, E> = Marlin<Fr, MarlinKZG10<E, DensePolynomial<Fr>>, Blake2s>;
+
+        pub struct MarlinBench;
+
+        impl SnarkBench for MarlinBench {
+            fn local<E: PairingEngine>(n: usize, timer_label: &str) {
+                let rng = &mut test_rng();
+                let circ_no_data = FibonacciCircuit::without_data(n);
+
+                let srs = KzgMarlin::<E::Fr, E>::universal_setup(n, n + 3, 4 * n, rng).unwrap();
+
+                let (pk, vk) = KzgMarlin::<E::Fr, E>::index(&srs, circ_no_data).unwrap();
+
+                let a = E::Fr::rand(rng);
+                let b = E::Fr::rand(rng);
+                let circ_data = FibonacciCircuit::from_start(a, b, n);
+                let public_inputs = vec![circ_data.chain.last().unwrap().unwrap()];
+                let timer = start_timer!(|| timer_label);
+                let zk_rng = &mut test_rng();
+                let proof = KzgMarlin::<E::Fr, E>::prove(&pk, circ_data, zk_rng).unwrap();
+                end_timer!(timer);
+                assert!(KzgMarlin::<E::Fr, E>::verify(&vk, &public_inputs, &proof, rng).unwrap());
+            }
+
+            fn mpc<E: PairingEngine, S: PairingShare<E>>(n: usize, timer_label: &str) {
+                let rng = &mut test_rng();
+                let circ_no_data = FibonacciCircuit::without_data(n);
+
+                let srs = KzgMarlin::<E::Fr, E>::universal_setup(n, n + 3, 4 * n, rng).unwrap();
+
+                let (pk, vk) = KzgMarlin::<E::Fr, E>::index(&srs, circ_no_data).unwrap();
+                let mpc_pk = IndexProverKey::from_public(pk);
+                let a = E::Fr::rand(rng);
+                let b = E::Fr::rand(rng);
+                let computation_timer = start_timer!(|| "do the mpc (cheat)");
+                let circ_data = mpc_fibonacci_circuit::<
+                    E::Fr,
+                    <MpcPairingEngine<E, S> as PairingEngine>::Fr,
+                >(a, b, n);
+                let public_inputs = vec![circ_data.chain.last().unwrap().unwrap().reveal()];
+                end_timer!(computation_timer);
+
+                MpcMultiNet::reset_stats();
+                let timer = start_timer!(|| timer_label);
+                let zk_rng = &mut test_rng();
+                
+                let proof = channel::without_cheating(|| {
+                    KzgMarlin::<
+                        <MpcPairingEngine<E, S> as PairingEngine>::Fr,
+                        MpcPairingEngine<E, S>,
+                    >::prove(&mpc_pk, circ_data, zk_rng)
+                    .unwrap()
+                    .reveal()
+                });
+                end_timer!(timer);
+                assert!(KzgMarlin::<E::Fr, E>::verify(&vk, &public_inputs, &proof, rng).unwrap());
+            }
+        }
+    }
+
+    pub mod plonk {
+        use super::*;
+        use ark_poly::univariate::DensePolynomial;
+        use ark_poly_commit::marlin::marlin_pc::MarlinKZG10;
+        use mpc_algebra::Reveal;
+        use mpc_plonk::relations::flat::CircuitLayout;
+        use mpc_plonk::relations::structured::PlonkCircuit;
+        use mpc_plonk::*;
+
+        fn plonk_fibonacci_circuit<F: Field>(c: FibonacciCircuit<F>) -> PlonkCircuit<F> {
+            let n_gates = c.chain.len() as u32 - 1;
+            let n_vars = n_gates + 1;
+            let last_var = n_vars as u32 - 1;
+            let mut this = PlonkCircuit {
+                n_vars,
+                pub_vars: std::iter::once((last_var, "out".to_owned())).collect(),
+                prods: Vec::new(),
+                sums: (0..(n_vars - 2)).map(|i| (i, i + 1, i + 2)).collect(),
+                values: c.chain.into_iter().collect(),
+            };
+            this.pad_to_power_of_2();
+            this
+        }
+        type MarlinPcPlonk<Fr, E> = mpc_plonk::Plonk<Fr, MarlinKZG10<E, DensePolynomial<Fr>>>;
+
+        pub struct PlonkBench;
+
+        impl SnarkBench for PlonkBench {
+            fn local<E: PairingEngine>(n: usize, timer_label: &str) {
+                let rng = &mut test_rng();
+                let circ_no_data = plonk_fibonacci_circuit(FibonacciCircuit::without_data(n));
+                let circ_no_data = CircuitLayout::from_circuit(&circ_no_data);
+
+                let a = E::Fr::rand(rng);
+                let b = E::Fr::rand(rng);
+                let circ_data = FibonacciCircuit::from_start(a, b, n);
+                let plonk_circ_data = plonk_fibonacci_circuit(circ_data.clone());
+                let plonk_circ_data = CircuitLayout::from_circuit(&plonk_circ_data);
+                let public_inputs =
+                    std::iter::once(("out".to_owned(), circ_data.chain.last().unwrap().unwrap()))
+                        .collect();
+                let setup_rng = &mut test_rng();
+                let zk_rng = &mut test_rng();
+                let srs =
+                    MarlinPcPlonk::<E::Fr, E>::universal_setup(n.next_power_of_two(), setup_rng);
+                let (pk, vk) = MarlinPcPlonk::<E::Fr, E>::circuit_setup(&srs, &circ_no_data);
+                let timer = start_timer!(|| timer_label);
+                let pf = MarlinPcPlonk::<E::Fr, E>::prove(&pk, &plonk_circ_data, zk_rng);
+                end_timer!(timer);
+                MarlinPcPlonk::<E::Fr, E>::verify(&vk, &circ_no_data, pf, &public_inputs);
+            }
+
+            fn mpc<E: PairingEngine, S: PairingShare<E>>(n: usize, timer_label: &str) {
+                let rng = &mut test_rng();
+                let circ_no_data = plonk_fibonacci_circuit(FibonacciCircuit::without_data(n));
+                let circ_no_data = CircuitLayout::from_circuit(&circ_no_data);
+
+                let a = E::Fr::rand(rng);
+                let b = E::Fr::rand(rng);
+                let circ_data = mpc_fibonacci_circuit::<
+                    E::Fr,
+                    <MpcPairingEngine<E, S> as PairingEngine>::Fr,
+                >(a, b, n);
+                let plonk_circ_data = plonk_fibonacci_circuit(circ_data.clone());
+                let plonk_circ_data = CircuitLayout::from_circuit(&plonk_circ_data);
+                let public_inputs = std::iter::once((
+                    "out".to_owned(),
+                    circ_data.chain.last().unwrap().unwrap().reveal(),
+                ))
+                .collect();
+                let setup_rng = &mut test_rng();
+                let zk_rng = &mut test_rng();
+                let srs =
+                    MarlinPcPlonk::<E::Fr, E>::universal_setup(n.next_power_of_two(), setup_rng);
+                let (pk, vk) = MarlinPcPlonk::<E::Fr, E>::circuit_setup(&srs, &circ_no_data);
+                let mpc_pk = Reveal::from_public(pk);
+                MpcMultiNet::reset_stats();
+                let t = start_timer!(|| timer_label);
+                let pf = channel::without_cheating(|| {
+                    let pf = MarlinPcPlonk::<
+                        <MpcPairingEngine<E, S> as PairingEngine>::Fr,
+                        MpcPairingEngine<E, S>,
+                    >::prove(&mpc_pk, &plonk_circ_data, zk_rng);
+
+                    let reveal_timer = start_timer!(|| "reveal");
+                    let pf = pf.reveal();
+                    end_timer!(reveal_timer);
+                    pf
+                });
+                end_timer!(t);
+                MarlinPcPlonk::<E::Fr, E>::verify(&vk, &circ_no_data, pf, &public_inputs);
+            }
+        }
+    }
+
+
+    fn mpc_fibonacci_circuit<Fr: Field, MFr: Field + Reveal<Base = Fr>>(
+        start0: Fr,
+        start1: Fr,
+        fiblen: usize,
+    ) -> FibonacciCircuit<MFr> {
+        let mut raw_chain: Vec<Fr> = vec![start0, start1];
+        for _ in 0..fiblen {
+            let mut rev = raw_chain.iter().rev();
+            let (last, second_last) = (rev.next(), rev.next());
+            raw_chain.push( last.unwrap().clone() + second_last.unwrap().clone() );
+        }
+        let rng = &mut test_rng();
+        let chain_shares = MFr::king_share_batch(raw_chain, rng);
+        FibonacciCircuit {
+            chain: chain_shares.into_iter().map(Some).collect(),
+        }
+    }
+
+    impl<ConstraintF: Field> ConstraintSynthesizer<ConstraintF>
+        for FibonacciCircuit<ConstraintF>
+    {
+        fn generate_constraints(
+            self,
+            cs: ConstraintSystemRef<ConstraintF>,
+        ) -> Result<(), SynthesisError> {
+            let mut vars: Vec<Variable> = self
+                .chain
+                .iter()
+                .take(self.fiblen()+2)
+                .map(|o| cs.new_witness_variable(|| o.ok_or(SynthesisError::AssignmentMissing)))
+                .collect::<Result<_, _>>()?;
+            vars.push(cs.new_input_variable(|| {
+                self.chain
+                    .last()
+                    .unwrap()
+                    .ok_or(SynthesisError::AssignmentMissing)
+            })?);
+
+            for i in 0..self.fiblen() {
+                cs.enforce_constraint(lc!() + vars[i] + vars[i+1], lc!() + Variable::One, lc!() + vars[i + 2])?;
+            }
+
+            Ok(())
+        }
+    }
+
+}
 mod squarings {
     use super::*;
     #[derive(Clone)]
@@ -177,7 +499,7 @@ mod squarings {
                 let rng = &mut test_rng();
                 let circ_no_data = RepeatedSquaringCircuit::without_data(n);
 
-                let srs = KzgMarlin::<E::Fr, E>::universal_setup(n, n + 2, 3 * n, rng).unwrap();
+                let srs = KzgMarlin::<E::Fr, E>::universal_setup(n, n + 2, n * 3, rng).unwrap();
 
                 let (pk, vk) = KzgMarlin::<E::Fr, E>::index(&srs, circ_no_data).unwrap();
                 let mpc_pk = IndexProverKey::from_public(pk);
@@ -389,6 +711,20 @@ impl ShareInfo {
                     timed_label,
                 ),
             },
+            Computation::Fibonacci => match self.alg {
+                MpcAlg::Spdz => B::mpc::<E, mpc_algebra::share::spdz::SpdzPairingShare<E>>(
+                    computation_size,
+                    timed_label,
+                ),
+                MpcAlg::Hbc => B::mpc::<E, mpc_algebra::share::add::AdditivePairingShare<E>>(
+                    computation_size,
+                    timed_label,
+                ),
+                MpcAlg::Gsz => B::mpc::<E, mpc_algebra::share::gsz20::GszPairingShare<E>>(
+                    computation_size,
+                    timed_label,
+                ),
+            },
         }
     }
 }
@@ -406,6 +742,7 @@ arg_enum! {
     #[derive(PartialEq, Debug, Clone, Copy)]
     pub enum Computation {
         Squaring,
+        Fibonacci,
     }
 }
 
@@ -485,24 +822,50 @@ impl Opt {}
 fn main() {
     let opt = Opt::from_args();
     env_logger::init();
-    match opt.proof_system {
-        ProofSystem::Groth16 => opt.field.run::<ark_bls12_377::Bls12_377, _>(
-            opt.computation,
-            opt.computation_size,
-            squarings::groth::Groth16Bench,
-            TIMED_SECTION_LABEL,
-        ),
-        ProofSystem::Plonk => opt.field.run::<ark_bls12_377::Bls12_377, _>(
-            opt.computation,
-            opt.computation_size,
-            squarings::plonk::PlonkBench,
-            TIMED_SECTION_LABEL,
-        ),
-        ProofSystem::Marlin => opt.field.run::<ark_bls12_377::Bls12_377, _>(
-            opt.computation,
-            opt.computation_size,
-            squarings::marlin::MarlinBench,
-            TIMED_SECTION_LABEL,
-        ),
+    match opt.computation {
+        Computation::Squaring => {
+            match opt.proof_system  {
+                ProofSystem::Groth16 => opt.field.run::<ark_bls12_377::Bls12_377, _>(
+                    opt.computation,
+                    opt.computation_size,
+                    squarings::groth::Groth16Bench,
+                    TIMED_SECTION_LABEL,
+                ),
+                ProofSystem::Plonk => opt.field.run::<ark_bls12_377::Bls12_377, _>(
+                    opt.computation,
+                    opt.computation_size,
+                    squarings::plonk::PlonkBench,
+                    TIMED_SECTION_LABEL,
+                ),
+                ProofSystem::Marlin => opt.field.run::<ark_bls12_377::Bls12_377, _>(
+                    opt.computation,
+                    opt.computation_size,
+                    squarings::marlin::MarlinBench,
+                    TIMED_SECTION_LABEL,
+                ),
+            }
+        },
+        Computation::Fibonacci => {
+            match opt.proof_system  {
+                ProofSystem::Groth16 => opt.field.run::<ark_bls12_377::Bls12_377, _>(
+                    opt.computation,
+                    opt.computation_size,
+                    fibonacci::groth::Groth16Bench,
+                    TIMED_SECTION_LABEL,
+                ),
+                ProofSystem::Plonk => opt.field.run::<ark_bls12_377::Bls12_377, _>(
+                    opt.computation,
+                    opt.computation_size,
+                    fibonacci::plonk::PlonkBench,
+                    TIMED_SECTION_LABEL,
+                ),
+                ProofSystem::Marlin => opt.field.run::<ark_bls12_377::Bls12_377, _>(
+                    opt.computation,
+                    opt.computation_size,
+                    fibonacci::marlin::MarlinBench,
+                    TIMED_SECTION_LABEL,
+                ),
+            }
+        }
     }
 }

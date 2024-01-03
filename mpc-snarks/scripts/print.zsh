@@ -2,10 +2,12 @@
 trap "exit" INT TERM
 trap "kill 0" EXIT
 
-proof=$1
-infra=$2
-size=$3
-n_parties=$4
+computation=$1
+proof=$2
+infra=$3
+size=$4
+n_parties=$5
+
 if [[ -z $BIN ]]
 then
     BIN=./target/release/proof
@@ -14,13 +16,20 @@ LABEL="timed section"
 
 
 function usage {
-  echo "Usage: $0 {groth16,marlin,plonk} {hbc,spdz,gsz,local,ark-local} N_SQUARINGS N_PARTIES" >&2
+  echo "Usage: $0 {squaring,fibonacci} {groth16,marlin,plonk} {hbc,spdz,gsz,local,ark-local} N_SQUARINGS N_PARTIES" >&2
   exit 1
 }
 
-if [ "$#" -ne 4 ] ; then
+if [ "$#" -ne 5 ] ; then
     usage
 fi
+
+case $computation in
+    squaring|fibonacci)
+        ;;
+    *)
+        usage
+esac
 
 case $proof in
     groth16|marlin|plonk)
@@ -44,10 +53,10 @@ case $infra in
           #$BIN $i ./data/4 &
           if [ $i -eq 0 ]
           then
-            RUST_BACKTRACE=1 $BIN -p $proof -c squaring --computation-size $size mpc --hosts data/$n_parties --party $i --alg $infra &
+            RUST_BACKTRACE=1 $BIN -p $proof -c $computation --computation-size $size mpc --hosts data/$n_parties --party $i --alg $infra &
             pid=$!
           else
-            $BIN -p $proof -c squaring --computation-size $size mpc --hosts data/$n_parties --party $i --alg $infra > /dev/null &
+            $BIN -p $proof -c $computation --computation-size $size mpc --hosts data/$n_parties --party $i --alg $infra > /dev/null&
             pid=$!
           fi
           PROCS+=($pid)
@@ -59,10 +68,10 @@ case $infra in
         done
     ;;
     local)
-        $BIN -p $proof -c squaring --computation-size $size local
+        $BIN -p $proof -c $computation --computation-size $size local
     ;;
     ark-local)
-        $BIN -p $proof -c squaring --computation-size $size ark-local
+        $BIN -p $proof -c $computation --computation-size $size ark-local
     ;;
     *)
         usage
